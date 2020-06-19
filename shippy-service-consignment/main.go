@@ -3,16 +3,9 @@ package main
 import (
 	"context"
 	"log"
-	"net"
-	"sync"
 
+	"github.com/micro/go-micro/v2"
 	pb "github.com/ryanyogan/shippy/shippy-service-consignment/proto/consignment"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
-)
-
-const (
-	port = ":50051"
 )
 
 type repository interface {
@@ -22,14 +15,11 @@ type repository interface {
 
 // Repository - Memory repo, simulats a datastore
 type Repository struct {
-	mu           sync.RWMutex
 	consignments []*pb.Consignment
 }
 
 // Create will create a consignment and return it, or return an error
 func (repo *Repository) Create(consignment *pb.Consignment) (*pb.Consignment, error) {
-	repo.mu.Lock()
-	defer repo.mu.Unlock()
 	updated := append(repo.consignments, consignment)
 	repo.consignments = updated
 	return consignment, nil
@@ -41,38 +31,40 @@ func (repo *Repository) GetAll() []*pb.Consignment {
 }
 
 // Service should implement all methods to satisfy the service.
-type service struct {
+type consignmentService struct {
 	repo repository
 }
 
-func (s *service) CreateConsignment(ctx context.Context, req *pb.Consignment) (*pb.Response, error) {
+func (s *consignmentService) CreateConsignment(ctx context.Context, req *pb.Consignment, res *pb.Response) error {
 	consignment, err := s.repo.Create(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &pb.Response{Created: true, Consignment: consignment}, nil
+	res.Created = true
+	res.Consignment = consignment
+	return nil
 }
 
-func (s *service) GetConsignments(ctx context.Context, req *pb.GetRequest) (*pb.Response, error) {
+func (s *consignmentService) GetConsignments(ctx context.Context, req *pb.GetRequest, res *pb.Response) error {
 	consignments := s.repo.GetAll()
-	return &pb.Response{Consignments: consignments}, nil
+	res.Consignments = consignments
+	return nil
 }
 
 func main() {
 	repo := &Repository{}
 
-	lis, err := net.Listen("tcp", port)
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+	svc := micro.NewService(
+		micro.Name("shippy.service.consignment"),
+	)
+	svc.Init()
+
+	if err := pb.RegisterShippingServiceHandler(svc.Server(), &consignmentService{repo}); err != nil {
+		log.Panic(err)
 	}
-	s := grpc.NewServer()
 
-	pb.RegisterShippingServiceServer(s, &service{repo})
-	reflection.Register(s)
-
-	log.Println("Running on port: ", port)
-	if err := s.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+	if err := svc.Run(); err != nil {
+		log.Panic(err)
 	}
 }
